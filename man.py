@@ -1,31 +1,32 @@
-from flask import Flask
-import threading
 import time
 import requests
 import random
 import re
-
-app = Flask(__name__)
 
 # --- API endpoints ---
 LIST_OFFERS_API = "https://server.offerpro.io/api/tasks/list_article_offers/?ordering=-cpc&no_pagination=false&page=1"
 API_A = "https://backend.rtechnology.in/api/finish-reading/"
 API_B = "https://rfitness.rayolesoftware.com/api/finish-reading/"
 
-HEADERS = {"Content-Type": "application/json"}
+HEADERS = {
+    "Content-Type": "application/json"
+}
 
+# --- Updated enc and payload ---
 OFFERS_PAYLOAD = {
     "enc": "1ShOOaT2pwmlLYnB6QqWGuz7K_bhD1BclNDS_y9ZU5ubJQDcvQ4wgwnZ8e5yuouHA40w5PJSGK0i7Y7Hs3h9yX1nmDTMOTMzF0vFMsoupJnTjDld0fF6XaZ08E5bByh4oHFqadIw8lRSVUzL7borVpsR_JHvFc6lgQwE_1A84PRmz0tcwBpPlTd8T9AKyL33Zt0zZDxYhU1h06LGiorwmW3PJz2y0MLmmvaxSwUi623FyDBFaUmIgfHZudZKTaKOMDN2deo1bcZ21W_TQlr-n3JXXvVO7FSnJTekwEFaVJU",
     "app_id": 14,
     "device_id": "43b3046d6d839eb9dc3719328dbcdafcae1c773e6f293b7cef98d133fba228dc"
 }
 
-# --- Cooldowns and used refids ---
+# --- Cooldowns ---
 cooldown_a_until = 0
 cooldown_b_until = 0
+
+# --- Track used refids to avoid duplicates ---
 used_refids = set()
 
-# --- Functions ---
+# --- Fetch latest offers and extract new refids ---
 def fetch_refids():
     try:
         r = requests.post(LIST_OFFERS_API, headers=HEADERS, json=OFFERS_PAYLOAD, timeout=10)
@@ -48,15 +49,22 @@ def fetch_refids():
                 new_refids.append(refid)
     return new_refids
 
+# --- API calls ---
 def try_api_a(refid):
     global cooldown_a_until
-    payload = {**OFFERS_PAYLOAD, "refid": refid}
+    payload = {
+        "refid": refid,
+        "enc": OFFERS_PAYLOAD["enc"],
+        "app_id": OFFERS_PAYLOAD["app_id"],
+        "device_id": OFFERS_PAYLOAD["device_id"]
+    }
     try:
         r = requests.post(API_A, headers=HEADERS, json=payload, timeout=10)
         resp = r.json()
     except Exception as e:
         print(f"[API A] Error: {e}")
         return False
+
     message = resp.get("message", "")
     if message == "ok":
         print(f"[API A] ✅ Success for refid {refid}")
@@ -72,16 +80,21 @@ def try_api_a(refid):
 
 def try_api_b(refid):
     global cooldown_b_until
-    payload = {**OFFERS_PAYLOAD,
-               "refid": refid,
-               "timestamp": int(time.time() * 1000),
-               "nonce": ''.join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=12))}
+    payload = {
+        "refid": refid,
+        "timestamp": int(time.time() * 1000),
+        "nonce": ''.join(random.choices("abcdefghijklmnopqrstuvwxyz0123456789", k=12)),
+        "enc": OFFERS_PAYLOAD["enc"],
+        "app_id": OFFERS_PAYLOAD["app_id"],
+        "device_id": OFFERS_PAYLOAD["device_id"]
+    }
     try:
         r = requests.post(API_B, headers=HEADERS, json=payload, timeout=10)
         resp = r.json()
     except Exception as e:
         print(f"[API B] Error: {e}")
         return False
+
     message = resp.get("message", "")
     if message == "ok":
         print(f"[API B] ✅ Success for refid {refid}")
@@ -96,22 +109,31 @@ def try_api_b(refid):
         print(f"[API B] ⚠️ Unknown response: {resp}")
     return False
 
-def worker():
-    refids_queue = []
+# --- Main loop ---
+def main_loop():
     global cooldown_a_until, cooldown_b_until
+    refids_queue = []
+
     while True:
         now = time.time()
+
+        # Refill queue if empty
         if not refids_queue:
             refids_queue = fetch_refids()
             if not refids_queue:
-                print("[INFO] No new refids, waiting 60s...")
-                time.sleep(60)
+                wait_time = 60
+                print(f"[INFO] No new refids, waiting {wait_time}s...")
+                time.sleep(wait_time)
                 continue
+
         refid = refids_queue.pop(0)
+
+        # Determine which API is free
         use_a = now >= cooldown_a_until
         use_b = now >= cooldown_b_until
+
         if use_a and use_b:
-            api_choice = random.choice(['A','B'])
+            api_choice = random.choice(['A', 'B'])
         elif use_a:
             api_choice = 'A'
         elif use_b:
@@ -122,22 +144,22 @@ def worker():
             refids_queue.insert(0, refid)
             time.sleep(wait_time)
             continue
+
+        # Send to chosen API
         if api_choice == 'A':
+            print(f"[INFO] Sending refid {refid} to API A")
             success = try_api_a(refid)
         else:
+            print(f"[INFO] Sending refid {refid} to API B")
             success = try_api_b(refid)
+
+        # If refid finished, fetch new refids
         if success:
+            print("[INFO] Offer finished, fetching new refids immediately...")
             refids_queue = fetch_refids()
+
         time.sleep(1)
 
-# --- Start worker thread ---
-threading.Thread(target=worker, daemon=True).start()
-
-# --- Flask endpoint for health check ---
-@app.route("/")
-def home():
-    return "OfferPro bot is running 24/7."
-
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
-
+    main_loop()
+            
