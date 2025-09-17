@@ -19,7 +19,7 @@ USERS = [
 
 PRE_COMPUTED_HASH = "72e08b10b491d84ebe82e6186e7bcea6b638f3f2cae16b257126f9a7bc334192"
 PROJECT_ID = "cash-panda-76893"
-COIN_LIMIT = 600000
+COIN_LIMIT = 200000
 
 # ──────────────────────────────────────────────────────────────
 # FUNCTIONS
